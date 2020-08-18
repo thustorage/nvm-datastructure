@@ -1,0 +1,4 @@
+# uTree
+* singleThread/ ---> single thread test
+* multiThread/ ---> multiple thread test
+* ycsb+redis/ ---> YCSB+Redis test, please modify Makefile in vire/src to add funcForC.o into compilation.
