@@ -1,0 +1,608 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <signal.h>
+#include <getopt.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <sys/utsname.h>
+#include <sys/mman.h>
+#include "funcForC.h"
+
+#include <vr_core.h>
+#include <vr_conf.h>
+#include <vr_signal.h>
+
+#define VR_CONF_PATH        "conf/vire.conf"
+
+#define VR_LOG_DEFAULT      LOG_NOTICE
+#define VR_LOG_MIN          LOG_EMERG
+#define VR_LOG_MAX          LOG_PVERB
+#define VR_LOG_PATH         NULL
+
+#define VR_PORT             8889
+#define VR_ADDR             "0.0.0.0"
+#define VR_INTERVAL         (30 * 1000) /* in msec */
+
+#define VR_PID_FILE         NULL
+
+#define VR_THREAD_NUM_DEFAULT	(sysconf(_SC_NPROCESSORS_ONLN)>6?6:sysconf(_SC_NPROCESSORS_ONLN))
+
+static int show_help;
+static int show_version;
+static int test_conf;
+static int daemonize;
+
+static struct option long_options[] = {
+    { "help",           no_argument,        NULL,   'h' },
+    { "version",        no_argument,        NULL,   'V' },
+    { "test-conf",      no_argument,        NULL,   't' },
+    { "daemonize",      no_argument,        NULL,   'd' },
+    { "verbose",        required_argument,  NULL,   'v' },
+    { "output",         required_argument,  NULL,   'o' },
+    { "conf-file",      required_argument,  NULL,   'c' },
+    { "pid-file",       required_argument,  NULL,   'p' },
+    { "thread-num",     required_argument,  NULL,   'T' },
+    { NULL,             0,                  NULL,    0  }
+};
+
+static char short_options[] = "hVtdv:o:c:p:T:";
+
+#ifdef USE_DAX
+char *thread_space_start_addr[2];
+char *master_thread_start_addr;
+char *backend_thread_start_addr;
+__thread char * start_addr;
+__thread char * curr_addr;
+const uint64_t SPACE_PER_THREAD = 120ULL * 1024ULL * 1024ULL * 1024ULL;
+const uint64_t SPACE_PER_MAIN_THREAD = 20ULL * 1024ULL * 1024ULL * 1024ULL;
+cpu_set_t cpuset[2];
+#endif
+
+static rstatus_t
+vr_daemonize(int dump_core)
+{
+    rstatus_t status;
+    pid_t pid, sid;
+    int fd;
+
+    pid = fork();
+    switch (pid) {
+    case -1:
+        log_error("fork() failed: %s", strerror(errno));
+        return VR_ERROR;
+
+    case 0:
+        break;
+
+    default:
+        /* parent terminates */
+        _exit(0);
+    }
+
+    /* 1st child continues and becomes the session leader */
+
+    sid = setsid();
+    if (sid < 0) {
+        log_error("setsid() failed: %s", strerror(errno));
+        return VR_ERROR;
+    }
+
+    if (signal(SIGHUP, SIG_IGN) == SIG_ERR) {
+        log_error("signal(SIGHUP, SIG_IGN) failed: %s", strerror(errno));
+        return VR_ERROR;
+    }
+
+    pid = fork();
+    switch (pid) {
+    case -1:
+        log_error("fork() failed: %s", strerror(errno));
+        return VR_ERROR;
+
+    case 0:
+        break;
+
+    default:
+        /* 1st child terminates */
+        _exit(0);
+    }
+
+    /* 2nd child continues */
+
+    /* change working directory */
+    if (dump_core == 0) {
+        status = chdir("/");
+        if (status < 0) {
+            log_error("chdir(\"/\") failed: %s", strerror(errno));
+            return VR_ERROR;
+        }
+    }
+
+    /* clear file mode creation mask */
+    umask(0);
+
+    /* redirect stdin, stdout and stderr to "/dev/null" */
+    /*
+    fd = open("/dev/null", O_RDWR);
+    if (fd < 0) {
+        log_error("open(\"/dev/null\") failed: %s", strerror(errno));
+        return VR_ERROR;
+    }
+
+    status = dup2(fd, STDIN_FILENO);
+    if (status < 0) {
+        log_error("dup2(%d, STDIN) failed: %s", fd, strerror(errno));
+        close(fd);
+        return VR_ERROR;
+    }
+
+    status = dup2(fd, STDOUT_FILENO);
+    if (status < 0) {
+        log_error("dup2(%d, STDOUT) failed: %s", fd, strerror(errno));
+        close(fd);
+        return VR_ERROR;
+    }
+
+    status = dup2(fd, STDERR_FILENO);
+    if (status < 0) {
+        log_error("dup2(%d, STDERR) failed: %s", fd, strerror(errno));
+        close(fd);
+        return VR_ERROR;
+    }
+
+    if (fd > STDERR_FILENO) {
+        status = close(fd);
+        if (status < 0) {
+            log_error("close(%d) failed: %s", fd, strerror(errno));
+            return VR_ERROR;
+        }
+    }
+    */
+    return VR_OK;
+}
+
+static void
+vr_print_run(struct instance *nci)
+{
+    int status;
+    struct utsname name;
+
+    status = uname(&name);
+
+    if (nci->log_filename) {
+        char *ascii_logo =
+"                _._                                                  \n"
+"           _.-``__ ''-._                                             \n"
+"      _.-``    `.  *_.  ''-._           Vire %s %s bit\n"
+"  .-`` .-```.  ```\-/    _.,_ ''-._                                   \n"
+" (    |      |       .-`    `,    )     Running in %s mode\n"
+" |`-._`-...-` __...-.``-._;'` _.-'|     Port: %d\n"
+" |    `-._   `._    /     _.-'    |     PID: %ld\n"
+"  `-._    `-._  `-./  _.-'    _.-'      OS: %s %s %s\n"
+" |`-._`-._    `-.__.-'    _.-'_.-'|                                  \n"
+" |    `-._`-._        _.-'_.-'    |     https://github.com/vipshop/vire\n"
+"  `-._    `-._`-.__.-'_.-'    _.-'                                   \n"
+" |`-._`-._    `-.__.-'    _.-'_.-'|                                  \n"
+" |    `-._`-._        _.-'_.-'    |                                  \n"
+"  `-._    `-._`-.__.-'_.-'    _.-'                                   \n"
+"      `-._    `-.__.-'    _.-'                                       \n"
+"          `-._        _.-'                                           \n"
+"              `-.__.-'                                               \n\n";
+        char *buf = dalloc(1024*16);
+        snprintf(buf,1024*16,ascii_logo,
+            VR_VERSION_STRING,
+            (sizeof(long) == 8) ? "64" : "32",
+            "standalone", server.port,
+            (long) nci->pid,
+            status < 0 ? " ":name.sysname,
+            status < 0 ? " ":name.release,
+            status < 0 ? " ":name.machine);
+        log_write_len(buf, strlen(buf));
+        dfree(buf);
+    }else {
+        char buf[256];
+        snprintf(buf,256,"Vire %s, %s bit, %s mode, port %d, pid %ld, built for %s %s %s ready to run.\n",
+            VR_VERSION_STRING, (sizeof(long) == 8) ? "64" : "32",
+            "standalone", server.port, (long) nci->pid,
+            status < 0 ? " ":name.sysname,
+            status < 0 ? " ":name.release,
+            status < 0 ? " ":name.machine);
+        log_write_len(buf, strlen(buf));
+    }
+}
+
+static void
+vr_print_done(void)
+{
+    loga("done, rabbit done");
+}
+
+static void
+vr_show_usage(void)
+{
+    log_stderr(
+        "Usage: vire [-?hVdt] [-v verbosity level] [-o output file]" CRLF
+        "            [-c conf file] [-p pid file]" CRLF
+        "            [-T worker threads number]" CRLF
+        "");
+    log_stderr(
+        "Options:" CRLF
+        "  -h, --help             : this help" CRLF
+        "  -V, --version          : show version and exit" CRLF
+        "  -t, --test-conf        : test configuration for syntax errors and exit" CRLF
+        "  -d, --daemonize        : run as a daemon");
+    log_stderr(
+        "  -v, --verbose=N        : set logging level (default: %d, min: %d, max: %d)" CRLF
+        "  -o, --output=S         : set logging file (default: %s)" CRLF
+        "  -c, --conf-file=S      : set configuration file (default: %s)" CRLF
+        "  -p, --pid-file=S       : set pid file (default: %s)" CRLF
+        "  -T, --thread_num=N     : set the worker threads number (default: %d)" CRLF
+        "",
+        VR_LOG_DEFAULT, VR_LOG_MIN, VR_LOG_MAX,
+        VR_LOG_PATH != NULL ? VR_LOG_PATH : "stderr",
+        VR_CONF_PATH,
+        VR_PID_FILE != NULL ? VR_PID_FILE : "off",
+        VR_THREAD_NUM_DEFAULT);
+}
+
+static rstatus_t
+vr_create_pidfile(struct instance *nci)
+{
+    char pid[VR_UINTMAX_MAXLEN];
+    int fd, pid_len;
+    ssize_t n;
+
+    fd = open(nci->pid_filename, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        log_error("opening pid file '%s' failed: %s", nci->pid_filename,
+                  strerror(errno));
+        return VR_ERROR;
+    }
+    nci->pidfile = 1;
+
+    pid_len = dsnprintf(pid, VR_UINTMAX_MAXLEN, "%d", nci->pid);
+
+    n = vr_write(fd, pid, pid_len);
+    if (n < 0) {
+        log_error("write to pid file '%s' failed: %s", nci->pid_filename,
+                  strerror(errno));
+        return VR_ERROR;
+    }
+
+    close(fd);
+
+    return VR_OK;
+}
+
+static void
+vr_remove_pidfile(struct instance *nci)
+{
+    int status;
+
+    status = unlink(nci->pid_filename);
+    if (status < 0) {
+        log_error("unlink of pid file '%s' failed, ignored: %s",
+                  nci->pid_filename, strerror(errno));
+    }
+}
+
+static void
+vr_set_default_options(struct instance *nci)
+{
+    int status;
+
+    nci->log_level = VR_LOG_DEFAULT;
+    nci->log_filename = VR_LOG_PATH;
+
+    nci->conf_filename = VR_CONF_PATH;
+
+    status = vr_gethostname(nci->hostname, VR_MAXHOSTNAMELEN);
+    if (status < 0) {
+        log_warn("gethostname failed, ignored: %s", strerror(errno));
+        dsnprintf(nci->hostname, VR_MAXHOSTNAMELEN, "unknown");
+    }
+    nci->hostname[VR_MAXHOSTNAMELEN - 1] = '\0';
+
+    nci->pid = (pid_t)-1;
+    nci->pid_filename = NULL;
+    nci->pidfile = 0;
+
+    nci->thread_num = (int)VR_THREAD_NUM_DEFAULT;
+}
+
+static rstatus_t
+vr_get_options(int argc, char **argv, struct instance *nci)
+{
+    int c, value;
+
+    opterr = 0;
+
+    for (;;) {
+        c = getopt_long(argc, argv, short_options, long_options, NULL);
+        if (c == -1) {
+            /* no more options */
+            break;
+        }
+
+        switch (c) {
+        case 'h':
+            show_version = 1;
+            show_help = 1;
+            break;
+
+        case 'V':
+            show_version = 1;
+            break;
+
+        case 't':
+            test_conf = 1;
+            break;
+
+        case 'd':
+            daemonize = 1;
+            break;
+
+        case 'v':
+            value = vr_atoi(optarg, strlen(optarg));
+            if (value < 0) {
+                log_stderr("vire: option -v requires a number");
+                return VR_ERROR;
+            }
+            nci->log_level = value;
+            break;
+
+        case 'o':
+            nci->log_filename = optarg;
+            break;
+
+        case 'c':
+            nci->conf_filename = optarg;
+            break;
+
+        case 'p':
+            nci->pid_filename = optarg;
+            break;
+            
+        case 'T':
+            value = vr_atoi(optarg, strlen(optarg));
+            if (value < 0) {
+                log_stderr("vire: option -T requires a number");
+                return VR_ERROR;
+            }
+
+            nci->thread_num = value;
+            break;
+
+        case '?':
+            switch (optopt) {
+            case 'o':
+            case 'c':
+            case 'p':
+                log_stderr("vire: option -%c requires a file name",
+                           optopt);
+                break;
+
+            case 'v':
+            case 'T':
+                log_stderr("vire: option -%c requires a number", optopt);
+                break;
+
+            default:
+                log_stderr("vire: invalid option -- '%c'", optopt);
+                break;
+            }
+            return VR_ERROR;
+
+        default:
+            log_stderr("vire: invalid option -- '%c'", optopt);
+            return VR_ERROR;
+
+        }
+    }
+
+    return VR_OK;
+}
+
+/*
+ * Returns true if configuration file has a valid syntax, otherwise
+ * returns false
+ */
+static bool
+vr_test_conf(struct instance *nci, int test)
+{
+    vr_conf *cf;
+
+    cf = conf_create(nci->conf_filename);
+    if (cf == NULL) {
+        if (test)
+            log_stderr("vire: configuration file '%s' syntax is invalid",
+                nci->conf_filename);
+        return false;
+    }
+
+    conf_destroy(cf);
+
+    if (test)
+        log_stderr("vire: configuration file '%s' syntax is ok",
+            nci->conf_filename);
+    return true;
+}
+
+void bindCPU() {
+  CPU_ZERO(&cpuset[0]);
+  CPU_ZERO(&cpuset[1]);
+  for (int j = 0; j < 18; j++) {
+    CPU_SET(j, &cpuset[0]);
+    CPU_SET(j + 18, &cpuset[1]);
+  }
+}
+
+static int
+vr_pre_run(struct instance *nci)
+{
+    int ret;
+    //printf("enter vr_pre_run\n");
+    ret = log_init(nci->log_level, nci->log_filename);
+    //printf("pass line 424\n");
+    if (ret != VR_OK) {
+        return ret;
+    }
+    //printf("pass line 428\n");
+    log_debug(LOG_VERB, "Vire used logfile: %s", nci->conf_filename);
+    //printf("pass line 430\n");
+    if (!vr_test_conf(nci, false)) {
+        log_error("conf file %s is error", nci->conf_filename);
+        return VR_ERROR;
+    }
+    //printf("pass line 435\n");
+    if (daemonize) {
+        ret = vr_daemonize(1);
+        if (ret != VR_OK) {
+            return ret;
+        }
+    }
+    //printf("pass line 442\n");
+    nci->pid = getpid();
+    //printf("pass line 444\n");
+    ret = signal_init();
+    if (ret != VR_OK) {
+        return ret;
+    }
+    //printf("pass line 449\n");
+    //printf("nci->pid_filename :%s\n", nci->pid_filename);
+    if (nci->pid_filename) {
+        //printf("pass line 452\n");
+        ret = vr_create_pidfile(nci);
+        if (ret != VR_OK) {
+            return VR_ERROR;
+        }
+    }
+#ifdef USE_DAX
+    bindCPU();
+#ifdef USE_PMDK
+    char pathname[100] = "/home/fkd/CPTree-202006/mount/pmem0/main_pool";
+    openPmemobjPool(pathname, SPACE_PER_MAIN_THREAD);
+    printf("open %s\n", pathname);
+#else
+    int fd[2];
+    void *pmem[2];
+    uint64_t allocate_size = 670ULL * 1024ULL * 1024ULL * 1024ULL;
+    
+    fd[0] = open("/dev/dax0.0", O_RDWR);
+    fd[1] = open("/dev/dax1.0", O_RDWR);
+    for (int i = 0; i < 2; i++) {
+      pmem[i] = mmap(NULL, allocate_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                     fd[i], 0);
+      thread_space_start_addr[i] = (char *)pmem[i] + 3 * SPACE_PER_MAIN_THREAD;
+      log_debug(LOG_DEBUG, "pmem[%d]=%p, thread_space_start_addr[%d]=%p",
+                i, pmem[i], i, thread_space_start_addr[i]);
+    }
+    //设置主线程的start_addr和curr_addr
+
+    start_addr = (char *)pmem[0];
+    curr_addr = start_addr;
+    master_thread_start_addr = pmem[0] + SPACE_PER_MAIN_THREAD;
+    backend_thread_start_addr = pmem[0] + 2 * SPACE_PER_MAIN_THREAD;
+    log_debug(LOG_DEBUG,
+              "master_thread_start_addr=%p, backend_thread_start_addr=%p",
+              master_thread_start_addr, backend_thread_start_addr);
+#endif
+
+#endif
+    
+
+    ret = init_server(nci);
+    //printf("pass line 460\n");
+    if (ret != VR_OK) {
+        return VR_ERROR;
+    }
+
+    vr_print_run(nci);
+
+    return VR_OK;
+}
+
+static void
+vr_post_run(struct instance *nci)
+{
+    /* deinit the threads */
+    workers_deinit();
+    backends_deinit();
+    master_deinit();
+    
+    if (nci->pidfile) {
+        vr_remove_pidfile(nci);
+    }
+
+    signal_deinit();
+
+    vr_print_done();
+
+    log_deinit();
+}
+
+static void
+vr_run(struct instance *nci)
+{
+    if (nci->thread_num <= 0) {
+        log_error("number of work threads must be greater than 0");
+        return;
+    } else if (nci->thread_num > 64) {
+        log_warn("WARNING: Setting a high number of worker threads is not recommended."
+            " Set this value to the number of cores in your machine or less.");
+    }
+
+    /* run the threads */
+    master_run();
+    workers_run();
+    backends_run();
+
+    /* wait for the threads finish */
+    workers_wait();
+    backends_wait();
+}
+
+int
+main(int argc, char **argv)
+{
+    rstatus_t status;
+    struct instance nci;
+    //printf("enter main\n");
+    
+    vr_set_default_options(&nci);
+
+    status = vr_get_options(argc, argv, &nci);
+    if (status != VR_OK) {
+        vr_show_usage();
+        exit(1);
+    }
+
+    if (show_version) {
+        log_stderr("This is vire-%s" CRLF, VR_VERSION_STRING);
+        if (show_help) {
+            vr_show_usage();
+        }
+        exit(0);
+    }
+
+    if (test_conf) {
+        if (!vr_test_conf(&nci, true)) {
+            exit(1);
+        }
+        exit(0);
+    }
+    
+    status = vr_pre_run(&nci);
+    if (status != VR_OK) {
+        vr_post_run(&nci);
+        exit(1);
+    }
+
+    server.executable = getAbsolutePath(argv[0]);
+
+    vr_run(&nci);
+
+    vr_post_run(&nci);
+
+    return VR_OK;
+}

@@ -1,2 +1,0 @@
-ycsb-redis-binding-0.15.0/ ---> client, "./test.sh"
-vire/ ---> server, "cd src/ && ./build_funcForC.sh && make && ../run.sh"
