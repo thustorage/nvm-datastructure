@@ -2,7 +2,7 @@
 
 ## uTree
 
-* we propose a B+-tree variant named μTree. It incorporates a shadow list-based layer to the leaf nodes of a B+-tree to gain benefits from both list and tree data structures. The list layer in PM is exempt from the structural refinement operations since list nodes in the list layer own separate PM spaces, which are organized in an _element-based_ way. Meanwhile, μTree still gains the locality benefit from the tree-based nodes. To alleviate the interference overhead, μTree coordinates the concurrency control between the tree and list layer, which moves the slow PM accesses out of the critical path.
+* we propose a B+-tree variant named μTree. It incorporates a shadow list-based layer to the leaf nodes of a B+-tree to gain benefits from both list and tree data structures. The list layer in PM is exempt from the structural refinement operations since list nodes in the list layer own separate PM spaces, which are organized in an _element-based_ way. Meanwhile, μTree still gains the locality benefit from the tree-based nodes. To alleviate the interference overhead, μTree coordinates the concurrency control between the tree and list layer, which moves the slow PM accesses out of the critical path.
 
 <p align="center">
 <img src="./Documentation/uTree-overview.PNG" >
@@ -96,10 +96,7 @@ NV-Tree, FAST&FAIR, FPTree and Skip List (persistent version). Single-thread ver
 
 ### Key-Value Store Evaluation
 
-* We use Redis, an in-memory key-value store to evaluate
-μTree in real-world environments. Redis is modied to
-support multi-thread execution, and we replace its storage
-engine with our index structures.
+* We use Redis, an in-memory key-value store to evaluate μTree in real-world environments. Redis is modified to support multi-thread execution, and we replace its storage engine with our index structures.
 * Execute the following commands. Remember to modify `src/Makefile` before `make` to add funcForC.o to compilation.
 
 ```
@@ -129,5 +126,6 @@ For more NVM-related research, please check out our publication list at [Storage
 If you are using uTree for your work, please cite:
 
 ```
-Youmin Chen, Youyou Lu, Kedong Fang, Qing Wang, Jiwu Shu. uTree: a Persistent B+-Tree with Low Tail Latency. PVLDB, 13(11): 2634-2648, 2020. DOI: https://doi.org/10.14778/3407790.3407850
+Youmin Chen, Youyou Lu, Kedong Fang, Qing Wang, Jiwu Shu. uTree: a Persistent B+-Tree with Low Tail Latency. 
+PVLDB, 13(11): 2634-2648, 2020. DOI: https://doi.org/10.14778/3407790.3407850
 ```
