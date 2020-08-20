@@ -56,8 +56,7 @@
 
 ### Single Thread Evaluation
 
-* In single thread evaluation, we implemented wB+-Tree,
-NV-Tree, FAST&FAIR, FPTree and Skip List (a persistent version). Note that the single-thread version of FPTree and NV-Tree have also been implemented by [Liu et al.](https://github.com/liumx10/ICPP-RNTree), you can also refer to their code accordingly.
+* In single thread evaluation, we implemented wB+-Tree, NV-Tree, FAST&FAIR, FPTree and Skip List (a persistent version). Note that the single-thread version of FPTree and NV-Tree have also been implemented by [Liu et al.](https://github.com/liumx10/ICPP-RNTree), you can also refer to their code accordingly.
 * For uTree, wB+-Tree, FAST&FAIR and Skip List, after entering the related folder, compile with `build.sh` and run tests with `run.sh`, `main.cpp` is the single-thread test program.
 
 ```
