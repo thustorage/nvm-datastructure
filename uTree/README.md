@@ -2,7 +2,7 @@
 
 ## uTree
 
-* we propose a B+-tree variant named μTree to achieve both #high throughput# and #low tail latency#. It incorporates a shadow list-based layer to the leaf nodes of a B+-tree to gain benefits from both list and tree data structures. The list layer in PM is exempt from the structural refinement operations since list nodes in the list layer own separate PM spaces, which are organized in an _element-based_ way. Meanwhile, μTree still gains the locality benefit from the tree-based nodes. To alleviate the interference overhead, μTree coordinates the concurrency control between the tree and list layer, which moves the slow PM accesses out of the critical path.
+* we propose a B+-tree variant named μTree to achieve both *high throughput* and *low tail latency*. It incorporates a shadow list-based layer to the leaf nodes of a B+-tree to gain benefits from both list and tree data structures. The list layer in PM is exempt from the structural refinement operations since list nodes in the list layer own separate PM spaces, which are organized in an _element-based_ way. Meanwhile, μTree still gains the locality benefit from the tree-based nodes. To alleviate the interference overhead, μTree coordinates the concurrency control between the tree and list layer, which moves the slow PM accesses out of the critical path.
 
 <p align="center">
 <img src="./Documentation/uTree-overview.PNG" >
@@ -10,7 +10,7 @@
 
 ## Tutorial
 
-* The test consists of three parts:
+* This repo consists of three parts:
   * Single Thread Evaluation
   * Multiple Thread Evaluation
   * Key-Value Store Evaluation
@@ -47,7 +47,7 @@
     $ ndctl create-namespace -e namespace1.0 --mode=fsdax -f
 ```
 
-4. Format current AEP device and mount it to corresponding location(i.e. ./mount/pmem0), assume step 3 create an AEP device /dev/pmem0
+4. Format current AEP device and mount it to the corresponding location (i.e. ./mount/pmem0), assume step 3 create an AEP device /dev/pmem0
 
 ```
     $ mkfs.ext4 /dev/pmem0
@@ -56,16 +56,16 @@
 
 ### Single Thread Evaluation
 
-* In single thread evaluation, we compare μTree with wB+-Tree,
-NV-Tree, FAST&FAIR, FPTree and Skip List (persistent version). Single-thread version of FPTree and NV-Tree have been implemented by [Liu et al.](https://github.com/liumx10/ICPP-RNTree) and we borrow their code directly.
-* For uTree, wB+-Tree, FAST&FAIR and Skip List, after entering corresponding directory, compile with `build.sh` and run tests with `run.sh`, `main.cpp` is the single-thread test program.
+* In single thread evaluation, we implemented wB+-Tree,
+NV-Tree, FAST&FAIR, FPTree and Skip List (a persistent version). Note that the single-thread version of FPTree and NV-Tree have also been implemented by [Liu et al.](https://github.com/liumx10/ICPP-RNTree), you can also refer to their code accordingly.
+* For uTree, wB+-Tree, FAST&FAIR and Skip List, after entering the related folder, compile with `build.sh` and run tests with `run.sh`, `main.cpp` is the single-thread test program.
 
 ```
     $ ./build.sh
     $ ./run.sh
 ```
 
-* NV-Tree and FPTree are under `RNTree/`, their single-thread test programs are placed under `RNTree/test/`, execute the following commands. Remember to bind cpu properly to avoid cross-NUMA accessing.
+* Liu et al's implementation is placed under `RNTree/`, their single-thread test programs are placed under `RNTree/test/`, execute the following commands. Remember to bind cpu properly to avoid cross-NUMA accessing.
 
 ```
     $ mkdir build
