@@ -2,7 +2,7 @@
 
 ## uTree
 
-* we propose a B+-tree variant named μTree. It incorporates a shadow list-based layer to the leaf nodes of a B+-tree to gain benefits from both list and tree data structures. The list layer in PM is exempt from the structural refinement operations since list nodes in the list layer own separate PM spaces, which are organized in an _element-based_ way. Meanwhile, μTree still gains the locality benefit from the tree-based nodes. To alleviate the interference overhead, μTree coordinates the concurrency control between the tree and list layer, which moves the slow PM accesses out of the critical path.
+* we propose a B+-tree variant named μTree to achieve both #high throughput# and #low tail latency#. It incorporates a shadow list-based layer to the leaf nodes of a B+-tree to gain benefits from both list and tree data structures. The list layer in PM is exempt from the structural refinement operations since list nodes in the list layer own separate PM spaces, which are organized in an _element-based_ way. Meanwhile, μTree still gains the locality benefit from the tree-based nodes. To alleviate the interference overhead, μTree coordinates the concurrency control between the tree and list layer, which moves the slow PM accesses out of the critical path.
 
 <p align="center">
 <img src="./Documentation/uTree-overview.PNG" >
